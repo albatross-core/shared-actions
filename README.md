@@ -131,6 +131,20 @@ jobs:
     uses: albatross-core/shared-actions/.github/workflows/yaml-lint.yml@main
 ```
 
+### `push-tag`
+
+Increment the latest semver patch tag and push it. Replaces the repeated `actions/github-script` snippet.
+
+```yaml
+- uses: albatross-core/shared-actions/push-tag@v0.0.2
+  with:
+    github-token: ${{ secrets.INTEGRATION_TESTS_TOKEN }}
+```
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `github-token` | yes | GitHub token with permission to create tags |
+
 ## Full Example
 
 A typical service deploy workflow goes from ~120 lines to ~30:
