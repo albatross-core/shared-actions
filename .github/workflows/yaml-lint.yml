@@ -37,7 +37,7 @@ jobs:
 
       - name: Write lint script
         run: |
-          cat > /tmp/yaml-lint.ts << 'SCRIPT'
+          cat > .yaml-lint.ts << 'SCRIPT'
           import { readFileSync, readdirSync, statSync } from "node:fs";
           import { join } from "node:path";
           import * as yaml from "js-yaml";
@@ -117,4 +117,4 @@ jobs:
           SCAN_PATH: ${{ inputs.paths }}
           SKIP_DIRS: ${{ inputs.skip-dirs }}
           FAIL_ON_FORMAT: ${{ inputs.fail-on-format }}
-        run: bun run /tmp/yaml-lint.ts
+        run: bun run .yaml-lint.ts
