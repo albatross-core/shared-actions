@@ -32,18 +32,21 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Lint YAML files
-        shell: bash
+      - name: Install js-yaml
+        run: bun add js-yaml
+
+      - name: Write lint script
         run: |
-          bun eval '
+          cat > /tmp/yaml-lint.ts << 'SCRIPT'
           import { readFileSync, readdirSync, statSync } from "node:fs";
           import { join } from "node:path";
           import * as yaml from "js-yaml";
 
-          const skipDirs = new Set("${{ inputs.skip-dirs }}".split(",").map(s => s.trim()));
-          const failOnFormat = "${{ inputs.fail-on-format }}" === "true";
+          const skipDirs = new Set(process.env.SKIP_DIRS!.split(",").map(s => s.trim()));
+          const failOnFormat = process.env.FAIL_ON_FORMAT === "true";
+          const scanPath = process.env.SCAN_PATH!;
 
-          function findYamlFiles(dir, files = []) {
+          function findYamlFiles(dir: string, files: string[] = []): string[] {
             for (const item of readdirSync(dir)) {
               const fullPath = join(dir, item);
               const stat = statSync(fullPath);
@@ -56,30 +59,30 @@ jobs:
             return files;
           }
 
-          function validateSyntax(filePath) {
+          function validateSyntax(filePath: string) {
             try {
               const content = readFileSync(filePath, "utf8");
               for (const doc of content.split(/^---\s*$/m).filter(d => d.trim())) {
                 yaml.load(doc.trim());
               }
-              return { valid: true, issues: [] };
-            } catch (e) {
+              return { valid: true, issues: [] as string[] };
+            } catch (e: any) {
               return { valid: false, issues: [e.message] };
             }
           }
 
-          function checkFormatting(filePath) {
+          function checkFormatting(filePath: string) {
             const lines = readFileSync(filePath, "utf8").split("\n");
-            const issues = [];
+            const issues: string[] = [];
             lines.forEach((line, i) => {
-              if (line.match(/\s+$/)) issues.push("Line " + (i+1) + ": trailing whitespace");
-              if (line.includes("\t")) issues.push("Line " + (i+1) + ": uses tabs instead of spaces");
+              if (line.match(/\s+$/)) issues.push(`Line ${i + 1}: trailing whitespace`);
+              if (line.includes("\t")) issues.push(`Line ${i + 1}: uses tabs instead of spaces`);
             });
             return { valid: issues.length === 0, issues };
           }
 
-          const files = findYamlFiles("${{ inputs.paths }}").sort();
-          console.log("Found " + files.length + " YAML files to check:\n");
+          const files = findYamlFiles(scanPath).sort();
+          console.log(`Found ${files.length} YAML files to check:\n`);
 
           let syntaxErrors = 0, formatIssues = 0;
           for (const f of files) {
@@ -87,24 +90,31 @@ jobs:
             const format = checkFormatting(f);
             if (!syntax.valid) {
               syntaxErrors++;
-              console.log("✗ " + f + ":");
-              syntax.issues.forEach(e => console.log("  " + e));
+              console.log(`✗ ${f}:`);
+              syntax.issues.forEach(e => console.log(`  ${e}`));
             } else if (!format.valid) {
               formatIssues++;
-              console.log("⚠ " + f + ":");
-              format.issues.forEach(w => console.log("  " + w));
+              console.log(`⚠ ${f}:`);
+              format.issues.forEach(w => console.log(`  ${w}`));
             } else {
-              console.log("✓ " + f);
+              console.log(`✓ ${f}`);
             }
           }
 
-          console.log("\nResults:");
-          console.log("- " + (files.length - syntaxErrors) + " files with valid syntax");
-          console.log("- " + syntaxErrors + " files with syntax errors");
-          console.log("- " + formatIssues + " files with formatting issues");
+          console.log(`\nResults:`);
+          console.log(`- ${files.length - syntaxErrors} files with valid syntax`);
+          console.log(`- ${syntaxErrors} files with syntax errors`);
+          console.log(`- ${formatIssues} files with formatting issues`);
 
           if (syntaxErrors > 0) { console.error("\n❌ FAILED: YAML syntax errors detected"); process.exit(1); }
           if (formatIssues > 0 && failOnFormat) { console.error("\n❌ FAILED: YAML formatting issues detected"); process.exit(1); }
           if (formatIssues > 0) { console.warn("\n⚠️ WARNING: YAML formatting issues detected"); }
           else { console.log("\n✅ All YAML files are valid and well-formatted!"); }
-          ' --install
+          SCRIPT
+
+      - name: Lint YAML files
+        env:
+          SCAN_PATH: ${{ inputs.paths }}
+          SKIP_DIRS: ${{ inputs.skip-dirs }}
+          FAIL_ON_FORMAT: ${{ inputs.fail-on-format }}
+        run: bun run /tmp/yaml-lint.ts
