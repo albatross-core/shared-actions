@@ -1,0 +1,75 @@
+name: Wait for Deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: "Environment to wait for"
+      sha:
+        required: true
+        type: string
+        description: "SHA to wait for"
+      version-url:
+        required: true
+        type: string
+        description: "URL that returns JSON with a 'sha' field (e.g., https://qa.usealbatross.ai/api/version)"
+      max_attempts:
+        required: false
+        type: number
+        default: 180
+        description: "Maximum polling attempts"
+      poll_interval:
+        required: false
+        type: number
+        default: 10
+        description: "Polling interval in seconds"
+    secrets:
+      INTEGRATION_TESTS_TOKEN:
+        required: true
+
+jobs:
+  wait-for-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for ${{ inputs.environment }} deploy
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.INTEGRATION_TESTS_TOKEN }}
+          script: |
+            const newSha = '${{ inputs.sha }}';
+            const url = '${{ inputs.version-url }}';
+            const maxAttempts = ${{ inputs.max_attempts }};
+            const pollInterval = ${{ inputs.poll_interval }} * 1000;
+
+            async function getDeployedSha() {
+              try {
+                const res = await fetch(url);
+                const data = await res.json();
+                return data.sha;
+              } catch(e) {
+                console.log('Error getting deployed sha', e);
+                return null;
+              }
+            }
+
+            console.log(`Waiting for ${url} to serve sha ${newSha}`);
+
+            let attempts = 0;
+            while (attempts < maxAttempts) {
+              const deployedSha = await getDeployedSha();
+
+              if (deployedSha) {
+                console.log(`Deployed sha: ${deployedSha}`);
+                if (deployedSha === newSha) {
+                  console.log('Deploy confirmed!');
+                  return;
+                }
+              }
+
+              await new Promise(resolve => setTimeout(resolve, pollInterval));
+              attempts++;
+            }
+
+            throw new Error(`Deployment not detected after ${maxAttempts} attempts`);

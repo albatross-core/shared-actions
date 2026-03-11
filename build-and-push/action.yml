@@ -1,0 +1,135 @@
+name: "Build and Push Docker Image"
+description: "Build and push a Docker image to GCP Artifact Registry or AWS ECR"
+
+inputs:
+  cloud:
+    description: "Cloud provider: gcp or aws"
+    required: true
+  image-name:
+    description: "Image name (e.g., website, eagle)"
+    required: true
+  environment:
+    description: "Environment tag (e.g., qa, dev, prod)"
+    required: true
+  dockerfile:
+    description: "Path to Dockerfile"
+    default: "./Dockerfile"
+  build-args:
+    description: "Extra Docker build args (multiline KEY=VALUE)"
+    default: ""
+  # GCP inputs
+  gcp-credentials-json:
+    description: "GCP service account key JSON"
+    default: ""
+  gcp-project-id:
+    description: "GCP project ID"
+    default: ""
+  gcp-ar-location:
+    description: "GCP Artifact Registry location"
+    default: "europe-west3"
+  gcp-ar-repository:
+    description: "GCP Artifact Registry repository name"
+    default: "albatross"
+  # AWS inputs
+  aws-access-key-id:
+    description: "AWS access key ID"
+    default: ""
+  aws-secret-access-key:
+    description: "AWS secret access key"
+    default: ""
+  aws-region:
+    description: "AWS region"
+    default: "eu-central-1"
+  aws-ecr-repository:
+    description: "AWS ECR repository path (e.g., albatross/website)"
+    default: ""
+
+outputs:
+  image:
+    description: "Full image reference with environment tag"
+    value: ${{ steps.set-image.outputs.image }}
+  registry:
+    description: "Container registry URL"
+    value: ${{ steps.set-image.outputs.registry }}
+
+runs:
+  using: "composite"
+  steps:
+    # ── GCP auth ──
+    - name: Auth to GCP
+      if: inputs.cloud == 'gcp'
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ inputs.gcp-credentials-json }}
+
+    - name: Set up gcloud
+      if: inputs.cloud == 'gcp'
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Login to Artifact Registry
+      if: inputs.cloud == 'gcp'
+      shell: bash
+      run: gcloud auth configure-docker ${{ inputs.gcp-ar-location }}-docker.pkg.dev --quiet
+
+    # ── AWS auth ──
+    - name: Configure AWS credentials
+      if: inputs.cloud == 'aws'
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Login to ECR
+      if: inputs.cloud == 'aws'
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    # ── Build & push ──
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Compute image tags
+      id: set-image
+      shell: bash
+      run: |
+        if [ "${{ inputs.cloud }}" = "gcp" ]; then
+          REGISTRY="${{ inputs.gcp-ar-location }}-docker.pkg.dev/${{ inputs.gcp-project-id }}/${{ inputs.gcp-ar-repository }}"
+          IMAGE="${REGISTRY}/${{ inputs.image-name }}"
+        else
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          IMAGE="${REGISTRY}/${{ inputs.aws-ecr-repository }}"
+        fi
+
+        {
+          echo "registry=${REGISTRY}"
+          echo "image=${IMAGE}:${{ inputs.environment }}"
+          echo "tags<<EOF"
+          echo "${IMAGE}:${{ inputs.environment }}"
+          echo "${IMAGE}:${{ github.sha }}"
+          echo "${IMAGE}:${{ github.ref_name }}"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Prepare build args
+      id: build-args
+      shell: bash
+      run: |
+        {
+          echo "args<<EOF"
+          echo "GIT_SHA=${{ github.sha }}"
+          echo "GIT_VERSION=${{ github.ref_name }}"
+          if [ -n "${{ inputs.build-args }}" ]; then
+            echo "${{ inputs.build-args }}"
+          fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build and push
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ${{ inputs.dockerfile }}
+        push: true
+        tags: ${{ steps.set-image.outputs.tags }}
+        build-args: ${{ steps.build-args.outputs.args }}

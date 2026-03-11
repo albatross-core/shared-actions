@@ -1,0 +1,73 @@
+name: "Update GitOps"
+description: "Checkout gitops repo, update service patches (image_tag + redeploy_ts), commit and push"
+
+inputs:
+  environment:
+    description: "Target environment (dev, qa, prod)"
+    required: true
+  service-name:
+    description: "Service name matching the .hcl filename (e.g., website, eagle)"
+    required: true
+  image-tag:
+    description: "Image tag to set in the patch file"
+    required: true
+  gitops-token:
+    description: "GitHub token with access to the gitops repo"
+    required: true
+  cloud:
+    description: "Cloud provider: gcp or aws (determines gitops path prefix)"
+    required: true
+  gitops-repo:
+    description: "GitOps repository"
+    default: "albatross-core/gitops"
+  gitops-ref:
+    description: "GitOps branch"
+    default: "main"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout GitOps repo
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.gitops-repo }}
+        token: ${{ inputs.gitops-token }}
+        path: gitops
+        ref: ${{ inputs.gitops-ref }}
+
+    - name: Compute patch path
+      id: patch
+      shell: bash
+      run: |
+        if [ "${{ inputs.cloud }}" = "gcp" ]; then
+          PREFIX="gcp/services_helmfile"
+        else
+          PREFIX="services_helmfile"
+        fi
+        echo "file=gitops/${PREFIX}/config/patches/${{ inputs.environment }}/${{ inputs.service-name }}.hcl" >> "$GITHUB_OUTPUT"
+
+    - name: Update image_tag
+      shell: bash
+      run: |
+        PATCH="${{ steps.patch.outputs.file }}"
+        sed -i "s/^\s*image_tag\s*=.*/image_tag = \"${{ inputs.image-tag }}\"/" "$PATCH"
+        echo "Updated image_tag to ${{ inputs.image-tag }} in $PATCH"
+
+    - name: Update redeploy_ts
+      shell: bash
+      run: |
+        PATCH="${{ steps.patch.outputs.file }}"
+        TS=$(date +%s)
+        sed -i "s/^\s*redeploy_ts.*/redeploy_ts = \"${TS}\"/" "$PATCH" \
+          || echo "redeploy_ts = \"${TS}\"" >> "$PATCH"
+        echo "Updated redeploy_ts in $PATCH"
+
+    - name: Commit and push
+      shell: bash
+      run: |
+        cd gitops
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+        git add -A
+        git commit -m "ci: update ${{ inputs.service-name }} image_tag to ${{ inputs.image-tag }} (${{ inputs.environment }})" || echo "No changes to commit"
+        git push origin ${{ inputs.gitops-ref }}
