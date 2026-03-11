@@ -1,0 +1,7 @@
+name: CI
+
+on: [push]
+
+jobs:
+  yaml-lint:
+    uses: ./.github/workflows/yaml-lint.yml
