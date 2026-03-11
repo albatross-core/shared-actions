@@ -1,0 +1,110 @@
+name: YAML Lint
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        required: false
+        type: string
+        default: "."
+        description: "Directory to scan for YAML files"
+      skip-dirs:
+        required: false
+        type: string
+        default: ".git,node_modules,charts,templates"
+        description: "Comma-separated directories to skip"
+      fail-on-format:
+        required: false
+        type: boolean
+        default: false
+        description: "Fail the workflow on formatting issues (not just syntax errors)"
+
+jobs:
+  yaml-lint:
+    runs-on: ubuntu-latest
+    name: Lint YAML files
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Lint YAML files
+        shell: bash
+        run: |
+          bun eval '
+          import { readFileSync, readdirSync, statSync } from "node:fs";
+          import { join } from "node:path";
+          import * as yaml from "js-yaml";
+
+          const skipDirs = new Set("${{ inputs.skip-dirs }}".split(",").map(s => s.trim()));
+          const failOnFormat = "${{ inputs.fail-on-format }}" === "true";
+
+          function findYamlFiles(dir, files = []) {
+            for (const item of readdirSync(dir)) {
+              const fullPath = join(dir, item);
+              const stat = statSync(fullPath);
+              if (stat.isDirectory()) {
+                if (!skipDirs.has(item)) findYamlFiles(fullPath, files);
+              } else if (item.endsWith(".yml") || item.endsWith(".yaml")) {
+                files.push(fullPath);
+              }
+            }
+            return files;
+          }
+
+          function validateSyntax(filePath) {
+            try {
+              const content = readFileSync(filePath, "utf8");
+              for (const doc of content.split(/^---\s*$/m).filter(d => d.trim())) {
+                yaml.load(doc.trim());
+              }
+              return { valid: true, issues: [] };
+            } catch (e) {
+              return { valid: false, issues: [e.message] };
+            }
+          }
+
+          function checkFormatting(filePath) {
+            const lines = readFileSync(filePath, "utf8").split("\n");
+            const issues = [];
+            lines.forEach((line, i) => {
+              if (line.match(/\s+$/)) issues.push("Line " + (i+1) + ": trailing whitespace");
+              if (line.includes("\t")) issues.push("Line " + (i+1) + ": uses tabs instead of spaces");
+            });
+            return { valid: issues.length === 0, issues };
+          }
+
+          const files = findYamlFiles("${{ inputs.paths }}").sort();
+          console.log("Found " + files.length + " YAML files to check:\n");
+
+          let syntaxErrors = 0, formatIssues = 0;
+          for (const f of files) {
+            const syntax = validateSyntax(f);
+            const format = checkFormatting(f);
+            if (!syntax.valid) {
+              syntaxErrors++;
+              console.log("✗ " + f + ":");
+              syntax.issues.forEach(e => console.log("  " + e));
+            } else if (!format.valid) {
+              formatIssues++;
+              console.log("⚠ " + f + ":");
+              format.issues.forEach(w => console.log("  " + w));
+            } else {
+              console.log("✓ " + f);
+            }
+          }
+
+          console.log("\nResults:");
+          console.log("- " + (files.length - syntaxErrors) + " files with valid syntax");
+          console.log("- " + syntaxErrors + " files with syntax errors");
+          console.log("- " + formatIssues + " files with formatting issues");
+
+          if (syntaxErrors > 0) { console.error("\n❌ FAILED: YAML syntax errors detected"); process.exit(1); }
+          if (formatIssues > 0 && failOnFormat) { console.error("\n❌ FAILED: YAML formatting issues detected"); process.exit(1); }
+          if (formatIssues > 0) { console.warn("\n⚠️ WARNING: YAML formatting issues detected"); }
+          else { console.log("\n✅ All YAML files are valid and well-formatted!"); }
+          ' --install
